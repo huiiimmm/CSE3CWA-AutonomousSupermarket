@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build output
+client/dist/
+dist/
+build/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# SQLite temporary files (created in WAL mode)
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Extra development databases
+server/data/dev-*.db
+server/data/test-*.db
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Temporary files
+tmp/
+*.tmp
