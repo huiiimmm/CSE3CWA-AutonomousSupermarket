@@ -1,11 +1,3 @@
-// server/index.js - starts the API
-const app = require('./app');
-const db = require('./db');
-
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
-  console.log(`API listening on http://localhost:${PORT}`);
-  const sub = db.prepare('SELECT run_id FROM runs WHERE is_submitted = 1').get();
-  console.log(sub ? `Submitted Run: ${sub.run_id}`
-    : 'No Submitted Run yet - create one with: node runSim.js --submit');
-});
+version https://git-lfs.github.com/spec/v1
+oid sha256:724b70ea7682840a5465a0fa75ef0b5819bd538f59b40cb5d468364db422f8e0
+size 430
