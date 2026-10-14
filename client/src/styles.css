@@ -1,0 +1,12 @@
+body { font-family: system-ui, sans-serif; color: #111; margin: 0; line-height: 1.45; }
+header, main { max-width: 1000px; margin: 0 auto; padding: 0 16px; }
+header { padding-top: 12px; border-bottom: 1px solid #ccc; }
+nav a { margin-right: 16px; } nav a.on { font-weight: bold; text-decoration: none; color: #111; }
+.run { margin: 8px 0; font-size: .9rem; } .warn { background: #fff3cd; padding: 4px 8px; }
+h1, h2 { margin: 24px 0 6px; } h3 { margin: 18px 0 4px; font-size: 1rem; }
+table { border-collapse: collapse; margin: 6px 0 12px; font-size: .9rem; }
+th, td { border-bottom: 1px solid #ddd; padding: 3px 12px 3px 0; text-align: left; vertical-align: top; }
+th.r, td.r { text-align: right; } .kv th { font-weight: normal; color: #555; }
+.bars { width: 100%; max-width: 720px; } .bars a { cursor: pointer; }
+.pass { color: #15803d; font-weight: bold; } .fail { color: #dc2626; font-weight: bold; }
+.error { color: #dc2626; } .muted { color: #666; font-size: .85rem; } button { font: inherit; }

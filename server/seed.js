@@ -36,6 +36,10 @@ const insert = db.prepare(`
   VALUES (@product_id, @name, @category, @unit_cost, @unit_price, @initial_qty, @is_perishable, @shelf_life_days)
 `);
 
-db.transaction(() => products.forEach((p) => insert.run(p)))();
+db.transaction(() => products.forEach((p) => insert.run({
+  product_id: p.product_id, name: p.name, category: p.category,
+  unit_cost: p.unit_cost, unit_price: p.unit_price, initial_qty: p.initial_qty,
+  is_perishable: p.is_perishable, shelf_life_days: p.shelf_life_days,   // popularity is NOT a table column
+})))();
 
 console.log(`Seeded ${products.length} products. Opening inventory cost: A$${total.toFixed(2)} (budget A$${BUDGET}).`);

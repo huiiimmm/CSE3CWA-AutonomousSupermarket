@@ -1,4 +1,4 @@
-// server/db.js
+// server/db.js - opens SQLite, creates tables, indexes and append-only protection
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
@@ -39,7 +39,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS run_config (
     run_id      TEXT PRIMARY KEY REFERENCES runs(run_id),
-    config_json TEXT NOT NULL   -- customer model + Store Brain rules, frozen
+    config_json TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS run_products (
@@ -56,6 +56,19 @@ db.exec(`
   );
 
   /* ---------- B. HISTORY (append-only) ---------- */
+
+  CREATE TABLE IF NOT EXISTS day_context (
+    run_id              TEXT NOT NULL REFERENCES runs(run_id),
+    day                 INTEGER NOT NULL CHECK (day BETWEEN 1 AND 60),
+    weekday_name        TEXT NOT NULL,
+    is_weekend          INTEGER NOT NULL CHECK (is_weekend IN (0,1)),
+    day_type_multiplier REAL NOT NULL,
+    noise_multiplier    REAL NOT NULL,
+    special_event       TEXT,
+    event_multiplier    REAL NOT NULL,
+    expected_customers  REAL NOT NULL,
+    PRIMARY KEY (run_id, day)
+  );
 
   CREATE TABLE IF NOT EXISTS customers (
     customer_id   INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,16 +88,34 @@ db.exec(`
     total_amount  REAL NOT NULL CHECK (total_amount >= 0)
   );
 
+  CREATE TABLE IF NOT EXISTS replenishment_orders (
+    order_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id           TEXT NOT NULL REFERENCES runs(run_id),
+    product_id       TEXT NOT NULL,
+    placed_day       INTEGER NOT NULL CHECK (placed_day BETWEEN 1 AND 59),
+    arrival_day      INTEGER NOT NULL CHECK (arrival_day BETWEEN 2 AND 60),
+    qty_wanted       INTEGER NOT NULL CHECK (qty_wanted > 0),
+    qty_ordered      INTEGER NOT NULL CHECK (qty_ordered >= 0),
+    unit_cost        REAL NOT NULL,
+    total_cost       REAL NOT NULL CHECK (total_cost >= 0),
+    cash_before      REAL NOT NULL,
+    cash_constrained INTEGER NOT NULL DEFAULT 0 CHECK (cash_constrained IN (0,1)),
+    reason           TEXT NOT NULL,
+    CHECK (arrival_day = placed_day + 1),
+    CHECK (total_cost <= cash_before),
+    FOREIGN KEY (run_id, product_id) REFERENCES run_products(run_id, product_id)
+  );
+
   CREATE TABLE IF NOT EXISTS inventory_batches (
     batch_id     INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id       TEXT NOT NULL REFERENCES runs(run_id),
     product_id   TEXT NOT NULL,
     source       TEXT NOT NULL CHECK (source IN ('opening','replenishment')),
     received_day INTEGER NOT NULL CHECK (received_day BETWEEN 1 AND 60),
-    expiry_day   INTEGER,        -- NULL for non-perishables
+    expiry_day   INTEGER,
     qty_received INTEGER NOT NULL CHECK (qty_received > 0),
     unit_cost    REAL NOT NULL CHECK (unit_cost > 0),
-    order_id     INTEGER,
+    order_id     INTEGER REFERENCES replenishment_orders(order_id),
     FOREIGN KEY (run_id, product_id) REFERENCES run_products(run_id, product_id)
   );
 
@@ -114,21 +145,16 @@ db.exec(`
     FOREIGN KEY (run_id, product_id) REFERENCES run_products(run_id, product_id)
   );
 
-  CREATE TABLE IF NOT EXISTS replenishment_orders (
-    order_id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id           TEXT NOT NULL REFERENCES runs(run_id),
-    product_id       TEXT NOT NULL,
-    placed_day       INTEGER NOT NULL CHECK (placed_day BETWEEN 1 AND 59),
-    arrival_day      INTEGER NOT NULL CHECK (arrival_day BETWEEN 2 AND 60),
-    qty_wanted       INTEGER NOT NULL CHECK (qty_wanted > 0),
-    qty_ordered      INTEGER NOT NULL CHECK (qty_ordered >= 0),
-    unit_cost        REAL NOT NULL,
-    total_cost       REAL NOT NULL CHECK (total_cost >= 0),
-    cash_before      REAL NOT NULL,
-    cash_constrained INTEGER NOT NULL DEFAULT 0 CHECK (cash_constrained IN (0,1)),
-    reason           TEXT NOT NULL,
-    CHECK (arrival_day = placed_day + 1),
-    CHECK (total_cost <= cash_before),
+  CREATE TABLE IF NOT EXISTS missed_demand (
+    missed_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id       TEXT NOT NULL REFERENCES runs(run_id),
+    day          INTEGER NOT NULL CHECK (day BETWEEN 1 AND 60),
+    customer_id  INTEGER NOT NULL REFERENCES customers(customer_id),
+    product_id   TEXT NOT NULL,
+    units_missed INTEGER NOT NULL CHECK (units_missed > 0),
+    lost_revenue REAL NOT NULL CHECK (lost_revenue >= 0),
+    reason       TEXT NOT NULL CHECK (reason IN ('sold_out','partial_stock')),
+    outcome      TEXT NOT NULL CHECK (outcome IN ('substituted','lost')),
     FOREIGN KEY (run_id, product_id) REFERENCES run_products(run_id, product_id)
   );
 
@@ -139,7 +165,7 @@ db.exec(`
     product_id TEXT NOT NULL,
     batch_id   INTEGER NOT NULL REFERENCES inventory_batches(batch_id),
     quantity   INTEGER NOT NULL CHECK (quantity > 0),
-    value      REAL NOT NULL CHECK (value >= 0),   -- at cost
+    value      REAL NOT NULL CHECK (value >= 0),
     FOREIGN KEY (run_id, product_id) REFERENCES run_products(run_id, product_id)
   );
 
@@ -148,7 +174,7 @@ db.exec(`
     run_id        TEXT NOT NULL REFERENCES runs(run_id),
     day           INTEGER NOT NULL CHECK (day BETWEEN 1 AND 60),
     type          TEXT NOT NULL CHECK (type IN ('opening','sales','replenishment')),
-    amount        REAL NOT NULL,          -- + in, - out
+    amount        REAL NOT NULL,
     balance_after REAL NOT NULL CHECK (balance_after >= 0),
     order_id      INTEGER REFERENCES replenishment_orders(order_id)
   );
@@ -162,7 +188,7 @@ db.exec(`
                ('low_stock','sold_out','expiry_warning','expired_removed',
                 'slow_mover','replenishment','cash_constrained')),
     action     TEXT NOT NULL,
-    detail     TEXT NOT NULL,             -- rule triggered + numbers used
+    detail     TEXT NOT NULL,
     outcome    TEXT,
     order_id   INTEGER REFERENCES replenishment_orders(order_id)
   );
@@ -185,37 +211,24 @@ db.exec(`
     PRIMARY KEY (run_id, day)
   );
 
-  /* ---------- D. LOST SALES ---------- */
+  /* ---------- D. COMMENTARY (written after a run completes; part of the report layer) ---------- */
 
-
-  CREATE TABLE IF NOT EXISTS day_context (
-    run_id              TEXT NOT NULL REFERENCES runs(run_id),
-    day                 INTEGER NOT NULL CHECK (day BETWEEN 1 AND 60),
-    weekday_name        TEXT NOT NULL,
-    is_weekend          INTEGER NOT NULL CHECK (is_weekend IN (0,1)),
-    day_type_multiplier REAL NOT NULL,
-    noise_multiplier    REAL NOT NULL,
-    special_event       TEXT,
-    event_multiplier    REAL NOT NULL,
-    expected_customers  REAL NOT NULL,
-    PRIMARY KEY (run_id, day)
-  );
-
-  CREATE TABLE IF NOT EXISTS missed_demand (
-    missed_id    INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id       TEXT NOT NULL REFERENCES runs(run_id),
-    day          INTEGER NOT NULL CHECK (day BETWEEN 1 AND 60),
-    customer_id  INTEGER NOT NULL REFERENCES customers(customer_id),
-    product_id   TEXT NOT NULL,
-    units_missed INTEGER NOT NULL CHECK (units_missed > 0),
-    lost_revenue REAL NOT NULL CHECK (lost_revenue >= 0),
-    reason       TEXT NOT NULL CHECK (reason IN ('sold_out','partial_stock')),
-    outcome      TEXT NOT NULL CHECK (outcome IN ('substituted','lost')),
-    FOREIGN KEY (run_id, product_id) REFERENCES run_products(run_id, product_id)
+  CREATE TABLE IF NOT EXISTS run_findings (
+    run_id         TEXT NOT NULL REFERENCES runs(run_id),
+    finding_no     INTEGER NOT NULL CHECK (finding_no BETWEEN 1 AND 3),
+    title          TEXT NOT NULL,
+    observation    TEXT NOT NULL,
+    evidence       TEXT NOT NULL,
+    diagnosis      TEXT NOT NULL,
+    implication    TEXT NOT NULL,
+    recommendation TEXT NOT NULL,
+    limitation     TEXT,
+    PRIMARY KEY (run_id, finding_no)
   );
 
   /* ---------- INDEXES ---------- */
 
+  CREATE UNIQUE INDEX IF NOT EXISTS one_submitted_run ON runs(is_submitted) WHERE is_submitted = 1;
   CREATE INDEX IF NOT EXISTS idx_customers_run_day  ON customers(run_id, day);
   CREATE INDEX IF NOT EXISTS idx_txn_run_day        ON transactions(run_id, day);
   CREATE INDEX IF NOT EXISTS idx_items_txn          ON transaction_items(txn_id);
@@ -227,15 +240,22 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_expiry_run_day     ON expiry_events(run_id, day);
   CREATE INDEX IF NOT EXISTS idx_cash_run_day       ON cash_ledger(run_id, day);
   CREATE INDEX IF NOT EXISTS idx_brain_run_day      ON store_brain_events(run_id, day);
-  CREATE INDEX IF NOT EXISTS idx_missed_run_day  ON missed_demand(run_id, day);
-  CREATE INDEX IF NOT EXISTS idx_missed_run_prod ON missed_demand(run_id, product_id);
+  CREATE INDEX IF NOT EXISTS idx_txn_customer       ON transactions(customer_id);
+  CREATE INDEX IF NOT EXISTS idx_items_run_day      ON transaction_items(run_id, day);
+  CREATE INDEX IF NOT EXISTS idx_moves_batch        ON inventory_movements(batch_id);
+  CREATE INDEX IF NOT EXISTS idx_batches_order      ON inventory_batches(order_id);
+  CREATE INDEX IF NOT EXISTS idx_orders_run_product ON replenishment_orders(run_id, product_id, placed_day);
+  CREATE INDEX IF NOT EXISTS idx_brain_run_cond     ON store_brain_events(run_id, condition, product_id);
+  CREATE INDEX IF NOT EXISTS idx_cash_order         ON cash_ledger(order_id);
+  CREATE INDEX IF NOT EXISTS idx_missed_run_day     ON missed_demand(run_id, day);
+  CREATE INDEX IF NOT EXISTS idx_missed_run_prod    ON missed_demand(run_id, product_id);
 `);
 
 /* ---------- APPEND-ONLY PROTECTION (triggers) ---------- */
 
 const historyTables = [
-  'customers', 'transactions', 'transaction_items', 'inventory_batches',
-  'inventory_movements', 'replenishment_orders', 'expiry_events',
+  'day_context', 'customers', 'transactions', 'transaction_items', 'inventory_batches',
+  'inventory_movements', 'missed_demand', 'replenishment_orders', 'expiry_events',
   'cash_ledger', 'store_brain_events', 'daily_summaries',
 ];
 
@@ -253,7 +273,6 @@ for (const t of historyTables) {
   `);
 }
 
-// Frozen configuration: insert only while run is 'created', never edit.
 for (const t of ['run_config', 'run_products']) {
   db.exec(`
     CREATE TRIGGER IF NOT EXISTS ${t}_no_update BEFORE UPDATE ON ${t}
@@ -268,7 +287,6 @@ for (const t of ['run_config', 'run_products']) {
   `);
 }
 
-// Runs: never deleted, core settings locked after creation, status can't go backwards.
 db.exec(`
   CREATE TRIGGER IF NOT EXISTS runs_no_delete BEFORE DELETE ON runs
   BEGIN SELECT RAISE(ABORT, 'runs cannot be deleted'); END;
@@ -286,6 +304,12 @@ db.exec(`
   BEFORE UPDATE OF is_submitted ON runs
   WHEN NEW.is_submitted = 1 AND NEW.status <> 'completed'
   BEGIN SELECT RAISE(ABORT, 'only a completed run can be the Submitted Run'); END;
+`);
+
+db.exec(`
+  CREATE TRIGGER IF NOT EXISTS run_findings_completed_only BEFORE INSERT ON run_findings
+  WHEN (SELECT status FROM runs WHERE run_id = NEW.run_id) <> 'completed'
+  BEGIN SELECT RAISE(ABORT, 'findings can only be written for a completed run'); END;
 `);
 
 module.exports = db;

@@ -1,122 +1,56 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { useState } from 'react';
+import { RunContext, useApi, useHashPath, useRun } from './api';
+import { A } from './ui';
+import ModelPage from './pages/ModelPage';
+import ReportPage from './pages/ReportPage';
+import AssurancePage from './pages/AssurancePage';
+import DayPage from './pages/DayPage';
+import { ProductPage, TransactionPage } from './pages/DetailPages';
+import RunsPage from './pages/RunsPage';
 
-function App() {
-  const [count, setCount] = useState(0)
+const NAV = [['/model', 'Model', 'model'], ['/report', '60-Day Report', 'report'], ['/assurance', 'Assurance', 'assurance'], ['/day/1', 'Daily Report', 'day'], ['/runs', 'Runs', 'runs']];
 
+function RunLine() {
+  const { runId, setRunId } = useRun();
+  const { data, error } = useApi(`/runs/${runId}`);
+  if (error) return <div className="run error">{error}. Create one with <code>node runSim.js --submit</code>, or use the Runs page.</div>;
+  if (!data) return <div className="run">Loading run...</div>;
+  const r = data.run;
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+    <div className={'run' + (r.is_submitted ? '' : ' warn')}>
+      Run <b>{r.run_id}</b> ({r.status}, seed {r.random_seed}) -{' '}
+      {r.is_submitted ? <b>Submitted Run</b> : <>not the Submitted Run <button onClick={() => setRunId('current')}>Back to Submitted Run</button></>}
+    </div>
+  );
 }
 
-export default App
+function Page({ path }) {
+  const [section, id] = path.split('/').filter(Boolean);
+  switch (section) {
+    case 'report': return <ReportPage />;
+    case 'assurance': return <AssurancePage />;
+    case 'day': return <DayPage day={id || '1'} />;
+    case 'product': return <ProductPage id={id} />;
+    case 'txn': return <TransactionPage id={id} />;
+    case 'runs': return <RunsPage />;
+    default: return <ModelPage />;
+  }
+}
+
+export default function App() {
+  const [runId, setRun] = useState(() => sessionStorage.getItem('runId') || 'current');
+  const setRunId = (id) => { sessionStorage.setItem('runId', id); setRun(id); };
+  const path = useHashPath();
+  const section = path.split('/').filter(Boolean)[0] || 'model';
+  const on = ['product', 'txn'].includes(section) ? 'report' : section;
+  return (
+    <RunContext.Provider value={{ runId, setRunId }}>
+      <header>
+        <b>Autonomous Supermarket</b> <span className="muted">60-day simulation, Swanston St / Town Hall, Melbourne</span>
+        <nav>{NAV.map(([to, label, key]) => <span key={key} className={on === key ? 'on' : ''}><A to={to}>{label}</A>{' '}</span>)}</nav>
+        <RunLine />
+      </header>
+      <main key={runId}><Page path={path} /></main>
+    </RunContext.Provider>
+  );
+}
